@@ -1,13 +1,15 @@
 // Sports — Ether content plugin (hosted JS).
-// Catalogue: sportarr.net public metadata service (TheSportsDB-shaped data).
+// Catalogue: sportarr.net public metadata service (TheSportsDB-shaped data), or TheSportsDB itself
+// when the owner picks it and supplies an API key.
 // Layout: League -> Season -> Event, presented to clients as Series -> Season -> Episode.
 // Promotions whose weekly shows share one league (WWE, AEW) are split into one root per show.
 (function () {
   "use strict";
 
-  var VERSION = "0.1.2";
+  var VERSION = "0.1.3";
   var KIND = "sports";
   var API = "https://sportarr.net/api/v2/json";
+  var TSDB = "https://www.thesportsdb.com/api/v1/json/";
   var UA = "EtherSportsPlugin/" + VERSION + " (Ether media server content plugin)";
   var DEFAULT_LEAGUES = "WWE, UFC, AEW, Boxing, English Premier League, UEFA Champions League, Formula 1, MotoGP, NFL, NBA";
   var KNOWN_IDS = {
@@ -56,6 +58,8 @@
       leagues: String(raw.leagues || DEFAULT_LEAGUES),
       seasonsBack: Math.min(back, 10),
       categories: String(raw.indexerCategories === undefined ? "5000,5060" : raw.indexerCategories).trim(),
+      source: String(raw.source || "sportarr").toLowerCase() === "thesportsdb" ? "thesportsdb" : "sportarr",
+      tsdbKey: String(raw.theSportsDbKey || "").trim().replace(/[^A-Za-z0-9_-]/g, ""),
       splitShows: raw.splitWeeklyShows !== false
     };
   }
@@ -63,8 +67,10 @@
   // ---------- KV cache (chunked so large schedules fit) ----------
   function kvGet(key) { try { var v = ether.kv.get(key); return typeof v === "string" && v ? v : null; } catch (e) { return null; } }
   function kvPut(key, val) { try { ether.kv.put(key, val); return true; } catch (e) { return false; } }
+  // Each catalogue source keeps its own cache: their ids and event lists differ.
+  function cacheNs() { return useTsdb() ? "t:" : ""; }
   function cacheGet(key) {
-    var head = kvGet("c:" + key);
+    var head = kvGet("c:" + cacheNs() + key);
     if (!head) return null;
     try {
       var h = JSON.parse(head);
@@ -72,7 +78,7 @@
       if (!h.chunks) return h.v;
       var out = [];
       for (var i = 0; i < h.chunks; i++) {
-        var part = kvGet("c:" + key + "#" + i);
+        var part = kvGet("c:" + cacheNs() + key + "#" + i);
         if (!part) return null;
         var arr = JSON.parse(part);
         for (var j = 0; j < arr.length; j++) out.push(arr[j]);
@@ -84,10 +90,10 @@
     var exp = nowMs() + ttlMs;
     if (Array.isArray(value) && value.length > 150) {
       var n = Math.ceil(value.length / 150);
-      for (var i = 0; i < n; i++) kvPut("c:" + key + "#" + i, JSON.stringify(value.slice(i * 150, (i + 1) * 150)));
-      kvPut("c:" + key, JSON.stringify({ exp: exp, chunks: n }));
+      for (var i = 0; i < n; i++) kvPut("c:" + cacheNs() + key + "#" + i, JSON.stringify(value.slice(i * 150, (i + 1) * 150)));
+      kvPut("c:" + cacheNs() + key, JSON.stringify({ exp: exp, chunks: n }));
     } else {
-      kvPut("c:" + key, JSON.stringify({ exp: exp, v: value }));
+      kvPut("c:" + cacheNs() + key, JSON.stringify({ exp: exp, v: value }));
     }
   }
 
@@ -107,15 +113,56 @@
     for (var k in h) if (String(k).toLowerCase() === name) return String(Array.isArray(h[k]) ? h[k][0] : h[k]);
     return "";
   }
-  function rateGate() {
+  function rateGate(ns, perMinute) {
+    ns = ns || "rl"; perMinute = perMinute || PER_MINUTE;
     var now = nowMs();
-    var until = parseInt(kvGet("rl:cooldown") || "0", 10) || 0;
+    var until = parseInt(kvGet(ns + ":cooldown") || "0", 10) || 0;
     if (until > now) throw new RateLimited((until - now) / 1000 + 1, "Waiting for the sports catalogue rate limit to reset");
     var win = Math.floor(now / 60000), st = { w: win, n: 0 };
-    try { var p = JSON.parse(kvGet("rl:window") || "null"); if (p && p.w === win) st = p; } catch (e) { /* ignore */ }
-    if (st.n >= PER_MINUTE) throw new RateLimited(60 - (now % 60000) / 1000 + 1, "Pacing requests to the sports catalogue");
+    try { var p = JSON.parse(kvGet(ns + ":window") || "null"); if (p && p.w === win) st = p; } catch (e) { /* ignore */ }
+    if (st.n >= perMinute) throw new RateLimited(60 - (now % 60000) / 1000 + 1, "Pacing requests to the sports catalogue");
     st.n++;
-    kvPut("rl:window", JSON.stringify(st));
+    kvPut(ns + ":window", JSON.stringify(st));
+  }
+
+  // ---------- TheSportsDB (v1, key in the path) ----------
+  // The free key answers with the same row shapes but short lists: 15 events for a season and
+  // five seasons, oldest first. Seasons are therefore derived from the league's current season.
+  function useTsdb() { var s = readSettings(); return s.source === "thesportsdb" && !!s.tsdbKey; }
+  function tsdbGet(file, query) {
+    var settings = readSettings();
+    if (!settings.tsdbKey) throw new RateLimited(100, "TheSportsDB needs an API key in the plugin settings");
+    rateGate("rlt", 25);
+    var resp;
+    try {
+      resp = ether.http.fetch({ method: "GET", url: TSDB + encodeURIComponent(settings.tsdbKey) + "/" + file + "?" + query, headers: { "Accept": "application/json", "User-Agent": UA }, timeoutMs: 20000 });
+    } catch (e) {
+      var m = String(e && e.message || e);
+      if (m.indexOf("__ETHER_FAULT__") >= 0 && !/timed out|network|request failed/i.test(m)) throw e;
+      log("TheSportsDB fetch failed " + file + ": " + m.slice(0, 160));
+      throw new RateLimited(20, "TheSportsDB could not be reached");
+    }
+    var status = resp ? resp.status : 0;
+    if (status === 429) {
+      kvPut("rlt:cooldown", String(nowMs() + 60000));
+      throw new RateLimited(61, "TheSportsDB asked us to slow down");
+    }
+    if (status === 400 || status === 401 || status === 403) throw new RateLimited(100, "TheSportsDB refused the API key: check it in the plugin settings");
+    if (status === 404) return [];
+    if (status < 200 || status >= 300 || !resp.body) {
+      log("TheSportsDB " + file + " -> HTTP " + status);
+      throw new RateLimited(20, "TheSportsDB answered HTTP " + status);
+    }
+    var doc;
+    try { doc = typeof resp.body === "string" ? JSON.parse(resp.body) : resp.body; } catch (e) { return []; }
+    if (!doc || typeof doc !== "object") return [];
+    var keys = Object.keys(doc), rows = keys.length ? doc[keys[0]] : [];
+    return Array.isArray(rows) ? rows : [];
+  }
+  function previousSeason(s) {
+    var m = /^(\d{4})(?:-(\d{4}))?$/.exec(String(s || ""));
+    if (!m) return "";
+    return m[2] ? (parseInt(m[1], 10) - 1) + "-" + (parseInt(m[2], 10) - 1) : String(parseInt(m[1], 10) - 1);
   }
   function apiGet(path) {
     rateGate();
@@ -167,14 +214,23 @@
   function lookupLeague(key) {
     var c = cacheGet("lg:" + key);
     if (c) return c;
-    var rows = apiGet("/lookup/league/" + encodeURIComponent(apiId(key)));
+    var rows;
+    if (useTsdb()) {
+      if (!/^\d+$/.test(key)) return null; // sportarr-only leagues have no TheSportsDB id
+      rows = tsdbGet("lookupleague.php", "id=" + encodeURIComponent(key));
+      if (rows.length) { rows[0].tsdbId = rows[0].idLeague; }
+    } else {
+      rows = apiGet("/lookup/league/" + encodeURIComponent(apiId(key)));
+    }
     if (!rows.length) return null;
     var l = slimLeague(rows[0]);
+    if (useTsdb()) l.cur = String(rows[0].strCurrentSeason || "");
     if (!l.name) return null;
     cachePut("lg:" + key, l, 7 * 864e5);
     return l;
   }
   function searchLeague(name) {
+    if (useTsdb()) return null; // the keyed v1 API has no league search by name: use ids or the built-in names
     var c = cacheGet("lgs:" + norm(name));
     if (c) return c.none ? null : c;
     var rows = apiGet("/search/league/" + encodeURIComponent(name));
@@ -210,8 +266,14 @@
   function listSeasons(league) {
     var c = cacheGet("seasons:" + league.key);
     if (!c) {
-      var rows = apiGet("/list/seasons/" + encodeURIComponent(apiId(league.key)));
-      c = rows.map(function (r) { return String(r.strSeason || ""); }).filter(function (s) { return seasonStartYear(s) > 0; });
+      if (useTsdb()) {
+        c = [];
+        var cur = league.cur || "";
+        for (var n = 0; cur && n <= 10; n++) { c.push(cur); cur = previousSeason(cur); }
+      } else {
+        var rows = apiGet("/list/seasons/" + encodeURIComponent(apiId(league.key)));
+        c = rows.map(function (r) { return String(r.strSeason || ""); }).filter(function (s) { return seasonStartYear(s) > 0; });
+      }
       if (c.length) cachePut("seasons:" + league.key, c, 12 * 36e5);
     }
     var thisYear = new Date(nowMs()).getUTCFullYear();
@@ -235,7 +297,14 @@
     var key = "sch:" + league.key + ":" + season;
     var c = cacheGet(key);
     if (c) return c;
-    var rows = apiGet("/schedule/league/" + encodeURIComponent(apiId(league.key)) + "/" + encodeURIComponent(season));
+    var rows;
+    if (useTsdb()) {
+      rows = tsdbGet("eventsseason.php", "id=" + encodeURIComponent(league.key) + "&s=" + encodeURIComponent(season));
+      // Event ids are TheSportsDB's own here; sportarr numbers events differently.
+      for (var t = 0; t < rows.length; t++) if (rows[t] && rows[t].idEvent) rows[t].idEvent = "ts-" + rows[t].idEvent;
+    } else {
+      rows = apiGet("/schedule/league/" + encodeURIComponent(apiId(league.key)) + "/" + encodeURIComponent(season));
+    }
     var now = Math.floor(nowMs() / 1000);
     var seen = {}, out = [];
     for (var i = 0; i < rows.length; i++) {

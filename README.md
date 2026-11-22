@@ -4,7 +4,7 @@ Content plugins for [Ether](https://github.com/braedonsaunders/ether). Each fold
 
 | Folder | Plugin id | Version | What it adds |
 | --- | --- | --- | --- |
-| `sports/` | `community.sports` | 0.1.2 | A Sports library: leagues as shows, seasons, events as episodes. Schedules come from the sportarr.net public metadata service. |
+| `sports/` | `community.sports` | 0.1.3 | A Sports library: leagues as shows, seasons, events as episodes. Schedules come from the sportarr.net public metadata service, or from TheSportsDB with the owner's API key. |
 | `books/` | `ether.books` | 1.0.11 | Books and Audiobooks libraries. |
 | `music/` | `ether.music` | 0.1.16 | A Music library. |
 
@@ -22,6 +22,7 @@ The Books changes (1.0.6 – 1.0.11) were made in `books/dist/plugin.js`, the bu
 
 ### `community.sports`
 
+- 0.1.3: TheSportsDB can be chosen as the catalogue source, with an API-key setting. sportarr.net stays the default and is used when no key is set. Each source has its own cache and request pacing. A refused key stops the sync with a clear message. New network permission: `www.thesportsdb.com`.
 - 0.1.2: seasons report `childCount` / `leafCount`; feeder series (F1 Academy, F2, F3 and similar) no longer match a Formula 1 event.
 - 0.1.1: request pacing for sportarr.net (15 requests a minute, honours `Retry-After`), so a sync either completes or fails cleanly; empty cached show lists are not treated as results.
 
@@ -42,5 +43,5 @@ The Books changes (1.0.6 – 1.0.11) were made in `books/dist/plugin.js`, the bu
 
 ```sh
 ether plugin check ./sports
-ether plugin pack -o community.sports-0.1.2.etherpkg ./sports
+ether plugin pack -o community.sports-0.1.3.etherpkg ./sports
 ```
