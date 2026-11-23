@@ -11,9 +11,13 @@ permissions:
 jobs:
   sports-replays:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest Ether the plugin says it supports (minEther in the catalogue entry), and the newest.
+        ether: [v0.3.18, main]
     env:
-      # The oldest Ether the plugin says it supports (minEther in the catalogue entry).
-      ETHER_REF: v0.3.18
+      ETHER_REF: ${{ matrix.ether }}
     steps:
       - uses: actions/checkout@v4
       - uses: denoland/setup-deno@v2
