@@ -5,7 +5,7 @@ Content plugins for [Ether](https://github.com/braedonsaunders/ether). Each fold
 | Folder | Plugin id | Version | What it adds |
 | --- | --- | --- | --- |
 | `sports-replays/` | `community.sports-replays` | 0.1.4 | A Sports Replays library: replays of finished events, as leagues, seasons and events. Schedules come from the sportarr.net public metadata service, or from TheSportsDB with the owner's API key. For live games use Ether's built-in Sports plugin. |
-| `books/` | `ether.books` | 1.0.11 | Books and Audiobooks libraries. Not in the marketplace, see below. |
+| `books/` | `ether.books` | 1.1.3 | Books, Audiobooks and Comics & Manga libraries. Not in the marketplace, see below. |
 | `music/` | `ether.music` | 0.1.16 | A Music library. Not in the marketplace, see below. |
 
 ## Provenance
@@ -31,6 +31,16 @@ The Books changes (1.0.6 – 1.0.11) were made in `books/dist/plugin.js`, the bu
 - 0.1.3: TheSportsDB can be chosen as the catalogue source, with an API-key setting. sportarr.net stays the default and is used when no key is set. Each source has its own cache and request pacing. A refused key stops the sync with a clear message. New network permission: `www.thesportsdb.com`.
 - 0.1.2: seasons report `childCount` / `leafCount`; feeder series (F1 Academy, F2, F3 and similar) no longer match a Formula 1 event.
 - 0.1.1: request pacing for sportarr.net (15 requests a minute, honours `Retry-After`), so a sync either completes or fails cleanly; empty cached show lists are not treated as results.
+
+### `ether.books` 1.1.0 – 1.1.3: Comics & Manga
+
+A third library, `comics`, in the same plugin. The code is one hand-written module, [`books/src/comics.js`](books/src/comics.js), inserted into `books/dist/plugin.js` before `src/plugin.ts`, plus a few hooks in the bundle (settings, router, the resolver's category, query builder and scorer dispatch).
+
+- **Catalogue.** Manga, manhwa and manhua from AniList (free, no key; popular, trending or newest; adult titles off by default). MangaUpdates fills in volume counts AniList leaves empty for ongoing series. Western comics from Metron (free account): the owner's followed series (`Batman (2016)` picks one run) and issues released in the last N weeks.
+- **Items.** One playable book per manga volume or comic issue (`series` + `series_number`), read like a book (CBZ, PDF, EPUB), presented as books in Jellyfin/Emby and Vela.
+- **Matching.** Series title plus volume (`v07`, `Vol.07`, `Vol 7`, `- 07`) or issue number (`150`, `#150`, `v3 150`). Other volumes or issues, ranges, chapter releases and annuals are rejected; CBZ ranks first because Ether's reader cannot open CBR.
+- **Cost.** The catalogue is cached for hours; a sync looks up MangaUpdates once per series (cached for a week). Item detail calls never wait on MangaUpdates or Metron. No `/changes`: Ether re-walks the cached list.
+- **Checked on a live server.** 60 manga series became 1,367 volumes. "Chainsaw Man Vol. 7" matched 4 indexer releases; the Usenet check found all sampled articles; Jellyfin's `/Items/{id}/Download` streamed the 197 MB CBZ, and its central directory lists all 197 pages. "Batman 150" and "Saga 066" return releases in category 7030. Metron itself was not exercised (no account on the test server).
 
 ### `ether.books` 1.0.6 – 1.0.11
 
