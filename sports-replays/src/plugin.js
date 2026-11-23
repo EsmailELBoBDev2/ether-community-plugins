@@ -1,16 +1,19 @@
-// Sports — Ether content plugin (hosted JS).
+// Sports Replays — Ether content plugin (hosted JS).
+// Replays of finished events: League -> Season -> Event, presented to clients as
+// Series -> Season -> Episode, with the recording found through the owner's indexers.
+// Live games, scores and channels are the job of Ether's own Sports plugin (org.ether.sports).
 // Catalogue: sportarr.net public metadata service (TheSportsDB-shaped data), or TheSportsDB itself
-// when the owner picks it and supplies an API key.
-// Layout: League -> Season -> Event, presented to clients as Series -> Season -> Episode.
+// when the owner picks it and saves an API key.
 // Promotions whose weekly shows share one league (WWE, AEW) are split into one root per show.
 (function () {
   "use strict";
 
-  var VERSION = "0.1.3";
+  var VERSION = "0.1.4";
+  var PLUGIN_ID = "community.sports-replays";
   var KIND = "sports";
   var API = "https://sportarr.net/api/v2/json";
   var TSDB = "https://www.thesportsdb.com/api/v1/json/";
-  var UA = "EtherSportsPlugin/" + VERSION + " (Ether media server content plugin)";
+  var UA = "EtherSportsReplaysPlugin/" + VERSION + " (Ether media server content plugin)";
   var DEFAULT_LEAGUES = "WWE, UFC, AEW, Boxing, English Premier League, UEFA Champions League, Formula 1, MotoGP, NFL, NBA";
   var KNOWN_IDS = {
     "wwe": "4444", "ufc": "4443", "aew": "4563", "boxing": "4445",
@@ -26,7 +29,7 @@
   // ---------- small helpers ----------
   function nowMs() { return Date.now(); }
   function json(status, body) { return { status: status, headers: { "Content-Type": "application/json" }, body: body }; }
-  function err(status, code, message) { return json(status, { error: { code: code, message: message } }); }
+  function err(status, code, message) { return json(status, { error: code, message: message }); }
   function log(msg) { try { ether.log(String(msg)); } catch (e) { /* ignore */ } }
   function parseBody(req) {
     if (!req || !req.body) return {};
@@ -34,7 +37,7 @@
     try { return JSON.parse(req.body) || {}; } catch (e) { return {}; }
   }
   function fold(s) {
-    return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "");
+    return String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   }
   function norm(s) {
     return fold(s).toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").trim();
@@ -49,6 +52,9 @@
   function clip(s, n) { s = String(s || ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; }
 
   // ---------- settings ----------
+  // Read once per request: the API key is a secret, the rest are plain settings.
+  var CUR = null;
+  function readSecret(name) { try { return String(ether.secret.get(name) || ""); } catch (e) { return ""; } }
   function readSettings() {
     var raw = {};
     try { raw = ether.settings.get() || {}; } catch (e) { raw = {}; }
@@ -59,10 +65,13 @@
       seasonsBack: Math.min(back, 10),
       categories: String(raw.indexerCategories === undefined ? "5000,5060" : raw.indexerCategories).trim(),
       source: String(raw.source || "sportarr").toLowerCase() === "thesportsdb" ? "thesportsdb" : "sportarr",
-      tsdbKey: String(raw.theSportsDbKey || "").trim().replace(/[^A-Za-z0-9_-]/g, ""),
+      tsdbKey: readSecret("theSportsDbKey").trim().replace(/[^A-Za-z0-9_-]/g, ""),
       splitShows: raw.splitWeeklyShows !== false
     };
   }
+  function current() { return CUR || (CUR = readSettings()); }
+  // What decides which items exist. A full walk records it; /changes asks for a new walk when it differs.
+  function settingsSig(s) { return fnv([s.source, s.leagues, s.seasonsBack, s.splitShows ? 1 : 0].join("|")); }
 
   // ---------- KV cache (chunked so large schedules fit) ----------
   function kvGet(key) { try { var v = ether.kv.get(key); return typeof v === "string" && v ? v : null; } catch (e) { return null; } }
@@ -107,6 +116,14 @@
     this.retryAfterSeconds = Math.max(2, Math.min(110, Math.ceil(seconds)));
     this.message = message;
   }
+  // A request the catalogue will never accept (bad or missing API key). Unlike RateLimited this is
+  // answered as a plain 4xx, so a sync stops at once with the message instead of retrying.
+  function Refused(status, code, message) {
+    this.name = "Refused";
+    this.status = status;
+    this.code = code;
+    this.message = message;
+  }
   function headerOf(resp, name) {
     var h = resp && resp.headers;
     if (!h || typeof h !== "object") return "";
@@ -128,11 +145,11 @@
   // ---------- TheSportsDB (v1, key in the path) ----------
   // The free key answers with the same row shapes but short lists: 15 events for a season and
   // five seasons, oldest first. Seasons are therefore derived from the league's current season.
-  function useTsdb() { var s = readSettings(); return s.source === "thesportsdb" && !!s.tsdbKey; }
-  function tsdbGet(file, query) {
-    var settings = readSettings();
-    if (!settings.tsdbKey) throw new RateLimited(100, "TheSportsDB needs an API key in the plugin settings");
-    rateGate("rlt", 25);
+  function useTsdb() { return current().source === "thesportsdb"; }
+  function tsdbGet(file, query, ungated) {
+    var settings = current();
+    if (!settings.tsdbKey) throw new Refused(400, "missing_api_key", "TheSportsDB is selected but no API key is saved. Add the key in the plugin settings, or switch the source back to sportarr.net.");
+    if (!ungated) rateGate("rlt", 25);
     var resp;
     try {
       resp = ether.http.fetch({ method: "GET", url: TSDB + encodeURIComponent(settings.tsdbKey) + "/" + file + "?" + query, headers: { "Accept": "application/json", "User-Agent": UA }, timeoutMs: 20000 });
@@ -147,14 +164,15 @@
       kvPut("rlt:cooldown", String(nowMs() + 60000));
       throw new RateLimited(61, "TheSportsDB asked us to slow down");
     }
-    if (status === 400 || status === 401 || status === 403) throw new RateLimited(100, "TheSportsDB refused the API key: check it in the plugin settings");
+    if (status === 400 || status === 401 || status === 403) throw new Refused(401, "bad_api_key", "TheSportsDB refused the API key (HTTP " + status + "). Check the key in the plugin settings.");
     if (status === 404) return [];
     if (status < 200 || status >= 300 || !resp.body) {
       log("TheSportsDB " + file + " -> HTTP " + status);
       throw new RateLimited(20, "TheSportsDB answered HTTP " + status);
     }
     var doc;
-    try { doc = typeof resp.body === "string" ? JSON.parse(resp.body) : resp.body; } catch (e) { return []; }
+    try { doc = typeof resp.body === "string" ? JSON.parse(resp.body) : resp.body; }
+    catch (e) { log("TheSportsDB " + file + " -> unreadable answer"); throw new RateLimited(20, "TheSportsDB sent an answer that could not be read"); }
     if (!doc || typeof doc !== "object") return [];
     var keys = Object.keys(doc), rows = keys.length ? doc[keys[0]] : [];
     return Array.isArray(rows) ? rows : [];
@@ -164,8 +182,8 @@
     if (!m) return "";
     return m[2] ? (parseInt(m[1], 10) - 1) + "-" + (parseInt(m[2], 10) - 1) : String(parseInt(m[1], 10) - 1);
   }
-  function apiGet(path) {
-    rateGate();
+  function apiGet(path, ungated) {
+    if (!ungated) rateGate();
     var resp;
     try {
       resp = ether.http.fetch({ method: "GET", url: API + path, headers: { "Accept": "application/json", "User-Agent": UA }, timeoutMs: 20000 });
@@ -190,7 +208,10 @@
       throw new RateLimited(20, "The sports catalogue answered HTTP " + status);
     }
     var doc;
-    try { doc = typeof resp.body === "string" ? JSON.parse(resp.body) : resp.body; } catch (e) { return null; }
+    // Always an array from here on. An unreadable body is a failed request, not an empty league:
+    // answering "no events" would make a whole league look deleted to the next sync.
+    try { doc = typeof resp.body === "string" ? JSON.parse(resp.body) : resp.body; }
+    catch (e) { log("fetch " + path + " -> unreadable answer"); throw new RateLimited(20, "The sports catalogue sent an answer that could not be read"); }
     var data = doc && typeof doc === "object" && !Array.isArray(doc) && doc.data !== undefined ? doc.data : doc;
     if (data && typeof data === "object" && !Array.isArray(data)) {
       var keys = Object.keys(data);
@@ -213,7 +234,7 @@
 
   function lookupLeague(key) {
     var c = cacheGet("lg:" + key);
-    if (c) return c;
+    if (c) return c.none ? null : c;
     var rows;
     if (useTsdb()) {
       if (!/^\d+$/.test(key)) return null; // sportarr-only leagues have no TheSportsDB id
@@ -222,10 +243,10 @@
     } else {
       rows = apiGet("/lookup/league/" + encodeURIComponent(apiId(key)));
     }
-    if (!rows.length) return null;
+    if (!rows.length) { cachePut("lg:" + key, { none: true }, 36e5); return null; }
     var l = slimLeague(rows[0]);
     if (useTsdb()) l.cur = String(rows[0].strCurrentSeason || "");
-    if (!l.name) return null;
+    if (!l.name) { cachePut("lg:" + key, { none: true }, 36e5); return null; }
     cachePut("lg:" + key, l, 7 * 864e5);
     return l;
   }
@@ -246,20 +267,38 @@
     cachePut("lg:" + l.key, l, 7 * 864e5);
     return l;
   }
-  function configuredLeagues(settings) {
-    var out = [], seen = {};
-    var parts = settings.leagues.split(/[,\n;]+/);
+  function leagueSpecs(settings) {
+    var parts = settings.leagues.split(/[,\n;]+/), out = [], seen = {};
     for (var i = 0; i < parts.length && out.length < 60; i++) {
       var p = parts[i].trim();
       if (!p) continue;
-      var l = null;
-      if (/^\d+$/.test(p)) l = lookupLeague(p);
-      else if (/^lg-\d+$/i.test(p)) l = lookupLeague("h" + p.slice(3));
-      else if (KNOWN_IDS[norm(p)]) l = lookupLeague(KNOWN_IDS[norm(p)]);
-      else l = searchLeague(p);
+      // The same league written twice is listed once (as far as that can be told without a request).
+      var k = /^\d+$/.test(p) ? p : /^lg-\d+$/i.test(p) ? "h" + p.slice(3) : KNOWN_IDS[norm(p)] || "n:" + norm(p);
+      if (!seen[k]) { seen[k] = 1; out.push(p); }
+    }
+    return out;
+  }
+  function resolveSpec(p) {
+    if (/^\d+$/.test(p)) return lookupLeague(p);
+    if (/^lg-\d+$/i.test(p)) return lookupLeague("h" + p.slice(3));
+    if (KNOWN_IDS[norm(p)]) return lookupLeague(KNOWN_IDS[norm(p)]);
+    return searchLeague(p);
+  }
+  function configuredLeagues(settings) {
+    var out = [], seen = {}, specs = leagueSpecs(settings);
+    for (var i = 0; i < specs.length; i++) {
+      var l = resolveSpec(specs[i]);
       if (l && !seen[l.key]) { seen[l.key] = 1; out.push(l); }
     }
     return out;
+  }
+  // The library's sport groups. The catalogue files UFC and boxing under "Fighting" and WWE and AEW
+  // under "Wrestling"; the library keeps them on one "Combat" shelf.
+  function sportGroup(sport) {
+    var s = String(sport || "").trim();
+    if (!s) return "Other";
+    if (/fight|wrestl|boxing|mma|martial|combat/i.test(s)) return "Combat";
+    return s;
   }
 
   function seasonStartYear(s) { var m = /^(\d{4})/.exec(String(s || "")); return m ? parseInt(m[1], 10) : 0; }
@@ -274,7 +313,7 @@
         var rows = apiGet("/list/seasons/" + encodeURIComponent(apiId(league.key)));
         c = rows.map(function (r) { return String(r.strSeason || ""); }).filter(function (s) { return seasonStartYear(s) > 0; });
       }
-      if (c.length) cachePut("seasons:" + league.key, c, 12 * 36e5);
+      if (c.length) cachePut("seasons:" + league.key, c, 864e5);
     }
     var thisYear = new Date(nowMs()).getUTCFullYear();
     c = c.filter(function (s) { return seasonStartYear(s) <= thisYear; });
@@ -282,6 +321,11 @@
     return c;
   }
 
+  function seasonIsOpen(season) {
+    var m = /^(\d{4})(?:-(\d{4}))?/.exec(String(season || ""));
+    if (!m) return false;
+    return parseInt(m[2] || m[1], 10) >= new Date(nowMs()).getUTCFullYear();
+  }
   function slimEvent(e) {
     var ts = Date.parse(String(e.strTimestamp || "")) || Date.parse(String(e.dateEvent || "") + "T00:00:00Z") || 0;
     return {
@@ -315,9 +359,8 @@
       out.push(ev);
     }
     out.sort(function (x, y) { return x.ts - y.ts || (x.id < y.id ? -1 : 1); });
-    var thisYear = new Date(nowMs()).getUTCFullYear();
-    var current = seasonStartYear(season) >= thisYear - 1;
-    cachePut(key, out, current ? 3 * 36e5 : 7 * 864e5);
+    // Only a season that can still gain events is kept for a short time.
+    cachePut(key, out, seasonIsOpen(season) ? 36e5 : 7 * 864e5);
     return out;
   }
 
@@ -383,11 +426,11 @@
     if (!show) return league.name;
     return show === "events" ? league.name + " Events" : league.name + " " + showLabel(show);
   }
-  function rootItem(league, show) {
-    var fields = { sport: league.sport || "Other", leagueName: league.name };
+  function rootItem(league, show, seasonCount) {
+    var fields = { sport: sportGroup(league.sport), leagueName: league.name };
     if (league.country) fields.country = league.country;
     return withEtag({
-      id: rootId(league.key, show), level: "league", title: rootTitle(league, show),
+      id: rootId(league.key, show), level: "league", title: rootTitle(league, show), childCount: seasonCount || 0,
       summary: clip(league.desc, 4000), art: art([["poster", league.poster], ["backdrop", league.banner], ["logo", league.badge]]),
       fields: fields,
       hints: { league: league.name, key: league.key, show: show || "" }
@@ -399,12 +442,12 @@
       index: seasonStartYear(season), title: "Season " + season, year: seasonStartYear(season),
       childCount: count, leafCount: count,
       art: art([["poster", league.poster]]),
-      fields: { sport: league.sport || "Other", leagueName: rootTitle(league, show), season: season },
+      fields: { sport: sportGroup(league.sport), leagueName: rootTitle(league, show), season: season },
       hints: { league: league.name, key: league.key, show: show || "", season: season, count: count }
     });
   }
   function eventItem(league, show, season, ev, index) {
-    var fields = { sport: league.sport || "Other", leagueName: rootTitle(league, show), season: season, eventDate: ev.d };
+    var fields = { sport: sportGroup(league.sport), leagueName: rootTitle(league, show), season: season, eventDate: ev.d };
     if (ev.v) fields.venue = ev.c ? ev.v + ", " + ev.c : ev.v;
     if (ev.h) fields.homeTeam = ev.h;
     if (ev.a) fields.awayTeam = ev.a;
@@ -416,7 +459,7 @@
       playable: true, art: art([["thumb", ev.th], ["poster", ev.po || league.poster], ["backdrop", ev.fa]]),
       fields: fields,
       hints: {
-        league: league.name, alt: league.alt, sport: league.sport, format: league.format, show: show || "",
+        key: league.key, league: league.name, alt: league.alt, sport: league.sport, format: league.format, show: show || "",
         season: season, title: ev.t, date: ev.d, dateUtc: ev.du, home: ev.h, away: ev.a, round: ev.r
       }
     });
@@ -440,19 +483,43 @@
     }
     return out;
   }
+  function leagueRoots(league, settings) {
+    var shows = leagueShows(league, settings), names = shows ? shows.concat(["events"]) : [""], out = [];
+    for (var j = 0; j < names.length; j++) {
+      var n = rootSeasons(league, names[j], shows, settings).length;
+      if (n) out.push(rootItem(league, names[j], n));
+    }
+    return out;
+  }
+  // The top level is paged by league. One league costs about four catalogue requests on a cold
+  // cache, so a page holds as many leagues as the request budget allows and then hands back a
+  // cursor: the walk keeps moving instead of one page needing forty requests in a row.
+  function browseRoots(body, settings) {
+    var specs = leagueSpecs(settings);
+    var limit = Math.max(1, Math.min(parseInt(body.limit, 10) || 200, 200));
+    var m = /^L(\d+)(?:\.(\d+))?$/.exec(String(body.cursor || ""));
+    var i = m ? parseInt(m[1], 10) : 0, off = m && m[2] ? parseInt(m[2], 10) : 0, items = [];
+    for (; i < specs.length; i++, off = 0) {
+      var roots;
+      try { var l = resolveSpec(specs[i]); roots = l ? leagueRoots(l, settings) : []; }
+      catch (e) {
+        // Out of budget part-way: return what is ready. (An empty page would end the walk, so wait instead.)
+        if (e && e.name === "RateLimited" && items.length) return { items: items, nextCursor: "L" + i + (off ? "." + off : "") };
+        throw e;
+      }
+      var take = roots.slice(off, off + (limit - items.length));
+      items = items.concat(take);
+      if (off + take.length < roots.length) return { items: items, nextCursor: "L" + i + "." + (off + take.length) };
+      if (items.length >= limit && i + 1 < specs.length) return { items: items, nextCursor: "L" + (i + 1) };
+    }
+    // The walk reached the end: remember which leagues it covered and under which settings.
+    var keys = configuredLeagues(settings).map(function (x) { return x.key; });
+    kvPut("walk", JSON.stringify({ sig: settingsSig(settings), keys: keys, at: nowMs() }));
+    return { items: items };
+  }
   function browse(body, settings) {
     var parentId = String(body.parentId || "");
-    if (!parentId) {
-      var leagues = configuredLeagues(settings), roots = [];
-      for (var i = 0; i < leagues.length; i++) {
-        var shows = leagueShows(leagues[i], settings);
-        var names = shows ? shows.concat(["events"]) : [""];
-        for (var j = 0; j < names.length; j++) {
-          if (rootSeasons(leagues[i], names[j], shows, settings).length) roots.push(rootItem(leagues[i], names[j]));
-        }
-      }
-      return page(roots, body);
-    }
+    if (!parentId) return browseRoots(body, settings);
     var r = parseRoot(parentId);
     if (r) {
       var league = lookupLeague(r.key);
@@ -471,6 +538,104 @@
     return { items: [] };
   }
 
+  // ---------- leagues in use ----------
+  // A league counts as in use for 30 days after a viewer opens it or plays one of its events.
+  // Only those are refreshed in the background; the rest cost nothing until somebody opens them.
+  var OPEN_MS = 30 * 864e5;
+  function markOpen(key) { if (key) kvPut("open:" + key, String(nowMs())); }
+  function openedAt(key) { var t = parseInt(kvGet("open:" + key) || "0", 10) || 0; return t && nowMs() - t < OPEN_MS ? t : 0; }
+
+  // A viewer opened a league or a season (Ether calls this when its stored copy is older than
+  // browse.expand.ttlHours), or opened a league in the "League" filter.
+  function expand(body, settings) {
+    var parentId = String(body.parentId || "");
+    if (parentId) {
+      var p = parseRoot(parentId) || parseSeason(parentId);
+      if (p) markOpen(p.key);
+      var pg = browse(body, settings);
+      return json(200, { items: pg.items || [], cursor: pg.nextCursor });
+    }
+    if (String(body.facet || "") !== "leagueName" || !body.value) return err(404, "not_found", "Nothing to expand");
+    var walk = readWalk(), want = norm(body.value), out = [];
+    var limit = Math.max(1, Math.min(parseInt(body.limit, 10) || 200, 200));
+    for (var i = 0; walk && i < walk.keys.length && !out.length; i++) {
+      var league = lookupLeague(walk.keys[i]);
+      if (!league) continue;
+      var shows = leagueShows(league, settings), names = shows ? shows.concat(["events"]) : [""];
+      for (var j = 0; j < names.length; j++) {
+        if (norm(rootTitle(league, names[j])) !== want) continue;
+        markOpen(league.key);
+        var seasons = rootSeasons(league, names[j], shows, settings);
+        if (!seasons.length) break;
+        var newest = seasons[0].hints.season, evs = eventsForRoot(league, newest, names[j], shows);
+        out.push(rootItem(league, names[j], seasons.length), seasons[0]);
+        for (var e = Math.max(0, evs.length - (limit - 2)); e < evs.length; e++) out.push(eventItem(league, names[j], newest, evs[e], e + 1));
+        break;
+      }
+    }
+    return json(200, { items: out });
+  }
+
+  // ---------- changes ----------
+  // The refresh feed. It looks only at leagues in use, and only at their newest season, so a
+  // library nobody is watching makes no catalogue requests at all. The cursor is the time of the
+  // last check ("c<seconds>"), or the last event sent when a page was cut short ("p<seconds>").
+  function readWalk() {
+    try { var w = JSON.parse(kvGet("walk") || "null"); return w && Array.isArray(w.keys) ? w : null; } catch (e) { return null; }
+  }
+  function changes(body, settings) {
+    var nowS = Math.floor(nowMs() / 1000);
+    var m = /^([cp])(\d+)$/.exec(String(body.cursor || body.since_token || body.sinceToken || ""));
+    if (!m) return json(200, { upserts: [], deletes: [], nextCursor: "c" + nowS, complete: true });
+    var walk = readWalk();
+    // New leagues, another source or a different season depth change which items exist: only a walk can tell.
+    if (!walk || walk.sig !== settingsSig(settings)) return err(501, "walk_needed", "The settings changed since the last full sync");
+    var since = parseInt(m[2], 10), paging = m[1] === "p";
+    var limit = Math.max(10, Math.min(parseInt(body.limit, 10) || 500, 500));
+    var found = [];
+    for (var i = 0; i < walk.keys.length; i++) {
+      var opened = openedAt(walk.keys[i]);
+      if (!opened) continue;
+      var league = lookupLeague(walk.keys[i]);
+      if (!league) continue;
+      var seasons = listSeasons(league);
+      if (!seasons.length) continue;
+      // Two days of overlap catch events the catalogue adds late; a league opened since the last
+      // check sends its whole newest season once. Unchanged items are skipped by their etag.
+      var floor = paging ? since : Math.floor(opened / 1000) > since ? 0 : since - 2 * 86400;
+      var shows = leagueShows(league, settings), names = shows ? shows.concat(["events"]) : [""];
+      for (var s = 0; s < Math.min(2, seasons.length); s++) {
+        var all = seasonEvents(league, seasons[s]);
+        for (var j = 0; j < names.length; j++) {
+          var evs = eventsForRoot(league, seasons[s], names[j], shows);
+          for (var e = 0; e < evs.length; e++) {
+            if (evs[e].ts > floor) found.push({ ev: evs[e], league: league, show: names[j], shows: shows, season: seasons[s], index: e + 1 });
+          }
+        }
+        // The season before matters only while the newest one has not reached the last check yet.
+        if (all.length && all[0].ts <= floor) break;
+      }
+    }
+    found.sort(function (a, b) { return a.ev.ts - b.ev.ts || (a.ev.id < b.ev.id ? -1 : 1); });
+    var upserts = [], sent = {}, cut = 0;
+    for (var f = 0; f < found.length; f++) {
+      var x = found[f];
+      if (upserts.length + 3 > limit) { cut = found[f - 1].ev.ts; break; }
+      var rid = rootId(x.league.key, x.show), sid = seasonId(x.league.key, x.show, x.season);
+      if (!sent[sid]) {
+        var ss = rootSeasons(x.league, x.show, x.shows, settings);
+        if (!sent[rid]) { sent[rid] = 1; upserts.push(rootItem(x.league, x.show, ss.length)); }
+        sent[sid] = 1;
+        var own = null;
+        for (var q = 0; q < ss.length; q++) if (ss[q].id === sid) own = ss[q];
+        upserts.push(own || seasonItem(x.league, x.show, x.season, eventsForRoot(x.league, x.season, x.show, x.shows).length));
+      }
+      upserts.push(eventItem(x.league, x.show, x.season, x.ev, x.index));
+    }
+    if (cut) return json(200, { upserts: upserts, deletes: [], nextCursor: "p" + cut, complete: false });
+    return json(200, { upserts: upserts, deletes: [], nextCursor: "c" + nowS, complete: true });
+  }
+
   // ---------- release matching ----------
   var STOP = { the: 1, and: 1, of: 1, vs: 1, v: 1, at: 1, fc: 1, cf: 1, afc: 1, sc: 1, ac: 1, de: 1, la: 1, el: 1, club: 1, united: 1, city: 1, real: 1, grand: 1, prix: 1, gp: 1, night: 1 };
   function tokens(s) { var n = norm(s); return n ? n.split(" ") : []; }
@@ -479,11 +644,44 @@
     return t.length ? t : tokens(s).filter(function (x) { return x.length >= 2; });
   }
   function hasToken(set, tok) { return set.indexOf(" " + tok + " ") >= 0; }
+  var MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12,
+    january: 1, february: 2, march: 3, april: 4, june: 6, july: 7, august: 8, september: 9, october: 10, november: 11, december: 12 };
+  var MONTH_RE = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
   function releaseDates(nrm) {
     var out = [], m, re1 = /\b(19|20)(\d{2}) (\d{2}) (\d{2})\b/g, re2 = /\b(\d{2}) (\d{2}) (19|20)(\d{2})\b/g;
     while ((m = re1.exec(nrm))) out.push(m[1] + m[2] + "-" + m[3] + "-" + m[4]);
     while ((m = re2.exec(nrm))) { out.push(m[3] + m[4] + "-" + m[2] + "-" + m[1]); out.push(m[3] + m[4] + "-" + m[1] + "-" + m[2]); }
+    // Month names: "Nov 22 2026", "November 22nd 2026", "22 Nov 2026", "2026 Nov 22".
+    var ord = "(\\d{1,2})(?:st|nd|rd|th)?", yr = "((?:19|20)\\d{2})";
+    var named = function (re, mi, di, yi) {
+      var rx = new RegExp(re, "g"), k;
+      while ((k = rx.exec(nrm))) {
+        var day = parseInt(k[di], 10);
+        if (day >= 1 && day <= 31) out.push(k[yi] + "-" + pad2(MONTHS[k[mi]]) + "-" + pad2(day));
+      }
+    };
+    named("\\b" + MONTH_RE + " " + ord + " " + yr + "\\b", 1, 2, 3);
+    named("\\b" + ord + " " + MONTH_RE + " " + yr + "\\b", 2, 1, 3);
+    named("\\b" + yr + " " + MONTH_RE + " " + ord + "\\b", 2, 3, 1);
     return out;
+  }
+  // The words that tell the two sides of a fixture apart. Normally the stop words (United, City,
+  // Real ...) are dropped; in a derby they are all that differs, so there each side keeps the words
+  // the other side does not have: Manchester United v Manchester City -> "united" and "city",
+  // with "manchester" required as well.
+  var TINY = { the: 1, and: 1, of: 1, vs: 1, v: 1, at: 1, de: 1, la: 1, el: 1, fc: 1, cf: 1, afc: 1, sc: 1, ac: 1, club: 1 };
+  function teamTokens(home, away) {
+    var ht = keyTokens(home), at = keyTokens(away);
+    var shared = ht.filter(function (x) { return at.indexOf(x) >= 0; });
+    if (!shared.length) return { h: ht, a: at, shared: [] };
+    var hAll = tokens(home).filter(function (x) { return x.length >= 2 && !TINY[x]; });
+    var aAll = tokens(away).filter(function (x) { return x.length >= 2 && !TINY[x]; });
+    var hu = hAll.filter(function (x) { return aAll.indexOf(x) < 0; }), au = aAll.filter(function (x) { return hAll.indexOf(x) < 0; });
+    return { h: hu.length ? hu : ht, a: au.length ? au : at, shared: shared };
+  }
+  // Common short forms in release names, so "Man Utd" still reads as Manchester United.
+  function expandTeamNames(set) {
+    return set.replace(/ man (utd|united|city) /g, " manchester $1 ").replace(/ utd /g, " united ");
   }
   function dayDiff(a, b) {
     var x = Date.parse(a + "T00:00:00Z"), y = Date.parse(b + "T00:00:00Z");
@@ -601,13 +799,20 @@
       } else { score = ds === 1 ? 0.95 : 0.8; reasons.push(ds === 1 ? "date matches" : "date one day off"); }
       if (!promo) { score -= 0.15; reasons.push("promotion name missing"); }
     } else if (t.mode === "teams") {
-      var ht = keyTokens(t.home), at = keyTokens(t.away);
-      var hh = ht.filter(function (x) { return hasToken(set, x); }).length, ah = at.filter(function (x) { return hasToken(set, x); }).length;
+      var tt = teamTokens(t.home, t.away), ht = tt.h, at = tt.a, tset = expandTeamNames(set);
+      var hh = ht.filter(function (x) { return hasToken(tset, x); }).length, ah = at.filter(function (x) { return hasToken(tset, x); }).length;
       if (!hh || !ah) return { score: 0, reasons: ["team names missing"], part: "" };
+      if (tt.shared.length && !tt.shared.every(function (x) { return hasToken(tset, x); })) return { score: 0, reasons: ["team names missing"], part: "" };
       if (ds < 0) return { score: 0, reasons: ["different date"], part: "" };
       var cover = (hh / ht.length + ah / at.length) / 2;
       if (ds > 0) { score = 0.75 + 0.2 * cover * ds; reasons.push("teams and date"); }
-      else if (yearOk || hasToken(set, t.season.slice(0, 4))) { score = 0.45 + 0.2 * cover; reasons.push("teams, year only"); }
+      else if (yearOk || hasToken(set, t.season.slice(0, 4))) {
+        // A year alone cannot tell the two meetings of a season apart. The side named first has
+        // to be the home side, and even then this stays the weakest match that is kept.
+        var hp = tset.indexOf(" " + ht[0] + " "), ap = tset.indexOf(" " + at[0] + " ");
+        if (hp >= 0 && ap >= 0 && ap < hp) return { score: 0, reasons: ["teams the other way round, no date in name"], part: "" };
+        score = 0.45 + 0.2 * cover; reasons.push("teams, year only");
+      }
       else return { score: 0, reasons: ["no date in name"], part: "" };
     } else if (t.mode === "motor") {
       var gpTok = keyTokens(t.title.split(" - ")[0]);
@@ -695,6 +900,7 @@
     var item = body.item && typeof body.item === "object" ? body.item : null;
     if (!item || !item.id) return json(200, { sources: [] });
     var t = targetOf(item);
+    if (item.hints && item.hints.key) markOpen(String(item.hints.key));
     var found = searchCandidates(t, settings, 2600);
     var ranked = rank(t, found.list).filter(function (x) { return x.e.score >= 0.6; }).slice(0, 8);
     var sources = ranked.map(function (x, i) {
@@ -725,53 +931,41 @@
     return json(200, { matches: matches });
   }
 
-  // ---------- diagnostics ----------
-  function probe(body, settings) {
-    // Runs the plugin's own search + scoring for the newest events of one league and reports raw findings.
-    var leagues = configuredLeagues(settings), want = norm(body.league || ""), out = [], start = nowMs();
-    for (var i = 0; i < leagues.length; i++) {
-      var lg = leagues[i];
-      if (want && norm(lg.name).indexOf(want) < 0) continue;
-      var seasons = listSeasons(lg), shows = leagueShows(lg, settings);
-      var roots = shows ? shows.concat(["events"]) : [""];
-      for (var r = 0; r < roots.length; r++) {
-        if (body.show && norm(body.show) !== roots[r]) continue;
-        var evs = seasons.length ? eventsForRoot(lg, seasons[0], roots[r], shows) : [];
-        if (!evs.length && seasons.length > 1) evs = eventsForRoot(lg, seasons[1], roots[r], shows);
-        var pick = evs.slice(-1 * (parseInt(body.count, 10) || 2)).reverse();
-        for (var e = 0; e < pick.length; e++) {
-          if (nowMs() - start > 16000) return json(200, { ok: true, partial: true, results: out });
-          var item = eventItem(lg, roots[r], seasons[0], pick[e], 1), t = targetOf(item);
-          var found = searchCandidates(t, settings, 3500), ranked = rank(t, found.list);
-          out.push({
-            league: rootTitle(lg, roots[r]), event: pick[e].t, date: pick[e].d, mode: t.mode, queries: found.queries,
-            candidates: found.list.length, matching: ranked.filter(function (x) { return x.e.score >= 0.6; }).length,
-            top: ranked.slice(0, 3).map(function (x) { return { release: clip(x.c.title, 110), indexer: x.c.indexer, score: x.e.score, why: x.e.reasons.join("; ") }; }),
-            rejectedSample: found.list.slice(0, 3).map(function (c) { var s = scoreCandidate(t, c); return clip(c.title, 90) + " -> " + (s.score || s.reasons.join("; ")); })
-          });
-        }
-      }
+  // ---------- connection test ----------
+  // Tests the source that is selected, with its key. One request, outside the sync's own pacing,
+  // so pressing Test during a sync reports on the connection and not on the pacing.
+  function testConnection(settings) {
+    var name = settings.source === "thesportsdb" ? "TheSportsDB" : "sportarr.net";
+    try {
+      var rows = settings.source === "thesportsdb" ? tsdbGet("lookupleague.php", "id=4328", true) : apiGet("/lookup/league/4443", true);
+      if (rows.length) return json(200, { ok: true, message: "Connected to " + name + "." });
+      return json(200, { ok: false, message: name + " answered, but without the league that was asked for." });
+    } catch (e) {
+      if (e && (e.name === "Refused" || e.name === "RateLimited")) return json(200, { ok: false, message: e.message });
+      throw e;
     }
-    return json(200, { ok: true, results: out });
   }
 
   // ---------- router ----------
+  function clearPrefix(prefix) {
+    try { var keys = ether.kv.list(prefix) || []; for (var i = 0; i < keys.length; i++) ether.kv.delete(keys[i]); } catch (e) { /* ignore */ }
+  }
   function handle(req) {
     try {
-      var path = String(req && req.path || "/"), body = parseBody(req), settings = readSettings();
-      if (path === "/health" || path === "/ether/health") return json(200, { ok: true, status: "ok", plugin: "community.sports", version: VERSION, kinds: [KIND] });
+      CUR = null;
+      var path = String(req && req.path || "/"), body = parseBody(req), settings = current();
+      if (path === "/health" || path === "/ether/health") return json(200, { ok: true, status: "ok", plugin: PLUGIN_ID, version: VERSION, kinds: [KIND] });
       if (path === "/ether/configure") {
-        try { var keys = ether.kv.list("c:shows:") || []; for (var i = 0; i < keys.length; i++) ether.kv.delete(keys[i]); } catch (e) { /* ignore */ }
+        // The weekly-show split depends on the settings, for either source.
+        clearPrefix("c:shows:");
+        clearPrefix("c:t:shows:");
         return json(200, { ok: true });
       }
-      if (path === "/ether/test" || path === "/ether/action/test") {
-        var rows = apiGet("/lookup/league/4443");
-        var ok = rows.length > 0;
-        return json(ok ? 200 : 502, { ok: ok, message: ok ? "Connected to the sports catalogue." : "The sports catalogue did not answer." });
-      }
-      if (path === "/ether/action/probe") return probe(body, settings);
+      if (path === "/ether/test" || path === "/ether/action/test") return testConnection(settings);
       var base = "/ether/v1/kinds/" + KIND;
       if (path === base + "/browse") return json(200, browse(body, settings));
+      if (path === base + "/changes") return changes(body, settings);
+      if (path === base + "/expand") return expand(body, settings);
       if (path === base + "/resolve") return resolve(body, settings);
       if (path === base + "/match") return match(body, settings);
       return err(404, "not_found", "Unknown route: " + path);
@@ -780,6 +974,7 @@
         return { status: 429, headers: { "Content-Type": "application/json", "Retry-After": String(e.retryAfterSeconds) },
           body: { error: "rate_limited", message: e.message, retryAfterSeconds: e.retryAfterSeconds } };
       }
+      if (e && e.name === "Refused") return err(e.status, e.code, e.message);
       var msg = String(e && e.message || e);
       if (msg.indexOf("__ETHER_FAULT__") >= 0) throw e;
       log("unhandled: " + msg);

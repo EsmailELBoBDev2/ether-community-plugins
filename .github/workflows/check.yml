@@ -1,0 +1,45 @@
+name: Check
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sports-replays:
+    runs-on: ubuntu-latest
+    env:
+      # The oldest Ether the plugin says it supports (minEther in the catalogue entry).
+      ETHER_REF: v0.3.18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Scoring and catalogue tests
+        run: deno test -A tests/sports-replays/
+      - name: The shipped bundle is the source
+        run: cmp sports-replays/src/plugin.js sports-replays/dist/plugin.js
+      - name: Fetch Ether
+        uses: actions/checkout@v4
+        with:
+          repository: braedonsaunders/ether
+          ref: ${{ env.ETHER_REF }}
+          path: .ether
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .ether/go.mod
+          cache-dependency-path: .ether/go.sum
+      - name: Build the Ether CLI
+        working-directory: .ether
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          CGO_ENABLED=0 go build -o "$RUNNER_TEMP/bin/ether" ./cmd/ether
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Conformance check
+        run: |
+          cp -r sports-replays "$RUNNER_TEMP/sports-replays"
+          ether plugin check "$RUNNER_TEMP/sports-replays"

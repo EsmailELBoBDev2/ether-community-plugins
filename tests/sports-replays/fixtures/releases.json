@@ -1,0 +1,149 @@
+{
+  "about": "Release names as the indexers returned them on 2026-11-23 for the events below (recorded through the plugin's own search on a live server). 'keep' must score at or above the 0.6 threshold, 'drop' must score 0. Entries marked constructed were written by hand for a case the recording did not contain.",
+  "cases": [
+    {
+      "mode": "weekly",
+      "hints": { "title": "RAW #1747", "league": "WWE", "alt": "World Wrestling Entertainment", "sport": "Wrestling", "format": "", "show": "raw", "date": "2026-11-16", "dateUtc": "2026-11-17", "season": "2026" },
+      "keep": [
+        "WWE.Monday.Night.RAW.2026.11.16.1080i.HDTV.H.264-Star",
+        "WWE_Raw_2026.11.16_1080i_FEED_x264-GITA",
+        "WWE.Monday.Night.RAW.2026.11.16.720p.HDTV.H.264-JFF",
+        "WWE.Monday.Night.RAW.2026.11.16.1080p.WEBRip.H.265-Star"
+      ],
+      "drop": [
+        "WWE.RAW.2026.11.09.NF.DEF.1080p.WEB.H.265-HEEL",
+        "[2/10] \"WWE.RAW.2026.11.09.NF.DEF.1080p.WEB.h265-HEEL.rar\"",
+        "WWE.RAW.2026.11.09.NF.DEF.720p.WEBRip.H.264-HEEL"
+      ]
+    },
+    {
+      "mode": "weekly",
+      "hints": { "title": "RAW #1746", "league": "WWE", "alt": "World Wrestling Entertainment", "sport": "Wrestling", "format": "", "show": "raw", "date": "2026-11-09", "dateUtc": "2026-11-10", "season": "2026" },
+      "keep": [
+        "WWE.RAW.2026.11.09.NF.DEF.1080p.WEB.H.265-HEEL",
+        "[2/10] \"WWE.RAW.2026.11.09.NF.DEF.1080p.WEB.h265-HEEL.rar\"",
+        "WWE.RAW.2026.11.09.NF.DEF.720p.WEBRip.H.264-HEEL"
+      ],
+      "drop": [
+        "WWE.Monday.Night.RAW.2026.11.16.1080i.HDTV.H.264-Star"
+      ]
+    },
+    {
+      "mode": "numbered",
+      "hints": { "title": "UFC Fight Night 294 Procházka vs Stirling", "league": "UFC", "alt": "Ultimate Fighting Championship", "sport": "Fighting", "format": "", "show": "", "date": "2026-11-21", "dateUtc": "2026-11-22", "season": "2026" },
+      "keep": [
+        "UFC.Fight.Night.294.Prochazka.vs.Stirling.1080p.WEB-DL.H264.Fight-BB",
+        "UFC.Fight.Night.294.Prochazka.vs.Stirling.1080p.WEB-DL.H264-FBB",
+        "UFC Fight Night 294 Prochazka vs Stirling 1080p WEB-DL H264-FBB",
+        "UFC.Fight.Night.294.Prochazka.vs.Stirling.Prelims.1080p.WEB-DL.H264.Fight-BB"
+      ],
+      "drop": [
+        "UFC.334.PPV.Ciryl.Gane.vs.Josh.Hokit.1080p.HDTV.H.264-Star"
+      ],
+      "order": ["UFC.Fight.Night.294.Prochazka.vs.Stirling.1080p.WEB-DL.H264.Fight-BB", "UFC.Fight.Night.294.Prochazka.vs.Stirling.Prelims.1080p.WEB-DL.H264.Fight-BB"]
+    },
+    {
+      "mode": "numbered",
+      "hints": { "title": "UFC 334 Gane vs Hokit", "league": "UFC", "alt": "Ultimate Fighting Championship", "sport": "Fighting", "format": "", "show": "", "date": "2026-11-14", "dateUtc": "2026-11-15", "season": "2026" },
+      "keep": [
+        "UFC.334.PPV.Ciryl.Gane.vs.Josh.Hokit.1080p.HDTV.H.264-Star",
+        "UFC 334 PPV Ciryl Gane vs Josh Hokit 1080p HDTV h264-Star",
+        "UFC.334.PPV.Ciryl.Gane.vs.Josh.Hokit.720p.HDTV.H.264-Star"
+      ],
+      "drop": [
+        "UFC.334.Ceremonial.Weigh-in.480p.WEBRip.H.264-Star",
+        "UFC.Fight.Night.294.Prochazka.vs.Stirling.1080p.WEB-DL.H264-FBB"
+      ]
+    },
+    {
+      "mode": "motor",
+      "hints": { "title": "Las Vegas Grand Prix - Race", "league": "Formula 1", "alt": "F1", "sport": "Motorsport", "format": "", "show": "", "date": "2026-11-21", "dateUtc": "2026-11-22", "season": "2026" },
+      "keep": [
+        "Formula1.2026.Las.Vegas.Grand.Prix.1080p.WEB.h264-BILLIE",
+        "Formula1.2026.Las.Vegas.Grand.Prix.UNCUT.720p.HDTV.H264-JFF",
+        "Formula1.2026.Las.Vegas.Grand.Prix.720p.WEB.H264-JFF",
+        "Formula1.2026.Las.Vegas.Grand.Prix.UNCUT.HDTV.H264-RBB"
+      ],
+      "drop": [
+        "Formula.1.2026.Las.Vegas.Grand.Prix.1st.Practice.DANiSH.720p.HDTV.x264-RCDiVX-xpost",
+        "Formula1.2026.Las.Vegas.Grand.Prix.Qualifying.1080p.WEB.H.264-BILLIE",
+        "Formula1.2026.Las.Vegas.Grand.Prix.Qualifying.1080p.AHDTV.x264-DARKSPORT"
+      ]
+    },
+    {
+      "mode": "motor",
+      "hints": { "title": "Las Vegas Grand Prix - Qualifying", "league": "Formula 1", "alt": "F1", "sport": "Motorsport", "format": "", "show": "", "date": "2026-11-20", "dateUtc": "2026-11-21", "season": "2026" },
+      "keep": [
+        "Formula1.2026.Las.Vegas.Grand.Prix.Qualifying.1080p.AHDTV.x264-DARKSPORT",
+        "Formula1.2026.Las.Vegas.Grand.Prix.Qualifying.1080p.WEB.H.264-BILLIE"
+      ],
+      "drop": [
+        "Formula.1.2026.Las.Vegas.Grand.Prix.1st.Practice.DANiSH.720p.HDTV.x264-RCDiVX-xpost",
+        "Formula1.2026.Las.Vegas.Grand.Prix.UNCUT.720p.HDTV.H264-JFF"
+      ]
+    },
+    {
+      "mode": "teams",
+      "hints": { "title": "Liverpool vs Manchester United", "league": "English Premier League", "alt": "Premier League, EPL", "sport": "Soccer", "format": "TeamvsTeam", "show": "", "date": "2026-11-22", "dateUtc": "2026-11-22", "home": "Liverpool", "away": "Manchester United", "season": "2026-2027" },
+      "keep": [
+        "EPL.2026.11.22.Liverpool.vs.Manchester.United.1080p.HDTV.DD5.1.x264-RMZ"
+      ],
+      "drop": [
+        "EPL.2023.03.05.Liverpool.Vs.Manchester.United.1080p.WEB.h264-SPORTSNET",
+        "EPL.2017.10.14.Liverpool.VS.Manchester.United.HDTV.x264-WaLMaRT",
+        "EPL_2026_Manchester_United_vs_Liverpool_03_05_1080pEN60fps_Fubo"
+      ]
+    },
+    {
+      "mode": "teams",
+      "hints": { "title": "Newcastle United vs Arsenal", "league": "English Premier League", "alt": "Premier League, EPL", "sport": "Soccer", "format": "TeamvsTeam", "show": "", "date": "2026-11-21", "dateUtc": "2026-11-21", "home": "Newcastle United", "away": "Arsenal", "season": "2026-2027" },
+      "keep": [
+        "EPL.2026.11.21.Newcastle.United.vs.Arsenal.1080p.HDTV.DD5.1.x264-RMZ"
+      ],
+      "drop": [
+        "EPL.2023.01.03.Arsenal.Vs.Newcastle.United.1080p.WEB.h264-SPORTSNET",
+        "EPL.2025.09.28.Newcastle.United.Vs.Arsenal.1080p.WEB.H264-NiGHTNiNJAS"
+      ]
+    },
+    {
+      "mode": "teams",
+      "constructed": true,
+      "hints": { "title": "Manchester United vs Manchester City", "league": "English Premier League", "alt": "Premier League, EPL", "sport": "Soccer", "format": "TeamvsTeam", "show": "", "date": "2026-10-03", "dateUtc": "2026-10-03", "home": "Manchester United", "away": "Manchester City", "season": "2026-2027" },
+      "keep": [
+        "EPL.2026.10.03.Manchester.United.vs.Manchester.City.1080p.HDTV.x264-RMZ",
+        "EPL.2026.10.03.Man.Utd.vs.Man.City.720p.WEB.h264-GRP"
+      ],
+      "drop": [
+        "EPL.2026.10.03.Manchester.City.vs.Arsenal.1080p.HDTV.x264-RMZ",
+        "EPL.2026.10.03.Manchester.United.vs.Chelsea.1080p.HDTV.x264-RMZ",
+        "EPL.2026.10.04.Manchester.City.vs.Everton.1080p.HDTV.x264-RMZ"
+      ]
+    },
+    {
+      "mode": "teams",
+      "constructed": true,
+      "hints": { "title": "Real Madrid vs Atlético Madrid", "league": "Spanish La Liga", "alt": "LaLiga", "sport": "Soccer", "format": "TeamvsTeam", "show": "", "date": "2026-09-27", "dateUtc": "2026-09-27", "home": "Real Madrid", "away": "Atlético Madrid", "season": "2026-2027" },
+      "keep": [
+        "La.Liga.2026.09.27.Real.Madrid.vs.Atletico.Madrid.1080p.WEB.h264-GRP",
+        "LaLiga.Real.Madrid.v.Atletico.Madrid.27.Sep.2026.720p.HDTV.x264-GRP"
+      ],
+      "drop": [
+        "La.Liga.2026.09.27.Real.Madrid.vs.Getafe.1080p.WEB.h264-GRP",
+        "La.Liga.2026.09.26.Atletico.Madrid.vs.Sevilla.1080p.WEB.h264-GRP"
+      ]
+    },
+    {
+      "mode": "teams",
+      "constructed": true,
+      "hints": { "title": "Newcastle United vs Arsenal", "league": "English Premier League", "alt": "Premier League, EPL", "sport": "Soccer", "format": "TeamvsTeam", "show": "", "date": "2026-11-21", "dateUtc": "2026-11-21", "home": "Newcastle United", "away": "Arsenal", "season": "2026-2027" },
+      "keep": [
+        "Premier.League.Newcastle.United.vs.Arsenal.Nov.21.2026.1080p.WEB.h264-GRP",
+        "Premier.League.Newcastle.United.vs.Arsenal.21st.November.2026.720p.HDTV-GRP",
+        "Premier.League.2026.Nov.21.Newcastle.vs.Arsenal.1080p.WEB.h264-GRP"
+      ],
+      "drop": [
+        "Premier.League.Newcastle.United.vs.Arsenal.Sep.28.2026.1080p.WEB.h264-GRP"
+      ]
+    }
+  ]
+}
